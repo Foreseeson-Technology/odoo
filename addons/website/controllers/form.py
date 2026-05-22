@@ -2,6 +2,7 @@
 
 import base64
 import json
+import logging
 import psycopg2
 
 from markupsafe import Markup
@@ -18,9 +19,120 @@ from odoo.tools.misc import hmac, consteq
 from odoo.tools.translate import _, LazyTranslate
 
 _lt = LazyTranslate(__name__)
+_logger = logging.getLogger(__name__)
 
 
 class WebsiteForm(http.Controller):
+
+    def _log_hr_applicant_job_id_state(self, stage, model_name=None, kwargs=None, values=None):
+        if model_name != 'hr.applicant' and not (values is not None and 'job_id' in values):
+            return
+
+        def _container_get(container, key):
+            if container is None:
+                return None
+            try:
+                return container.get(key)
+            except Exception as exc:
+                return "<%s while reading %s>" % (type(exc).__name__, key)
+
+        def _container_keys(container):
+            if container is None:
+                return None
+            try:
+                return list(container.keys())
+            except Exception as exc:
+                return ["<%s while reading keys>" % type(exc).__name__]
+
+        def _to_flat_false_dict(container):
+            if container is None:
+                return None
+            try:
+                if hasattr(container, 'to_dict'):
+                    return container.to_dict(flat=False)
+                return dict(container)
+            except Exception as exc:
+                return {"<error>": "%s while reading container" % type(exc).__name__}
+
+        def _getlist(container, key):
+            if container is None:
+                return None
+            try:
+                if hasattr(container, 'getlist'):
+                    return container.getlist(key)
+                value = container.get(key)
+                return value if isinstance(value, list) else [value] if value is not None else []
+            except Exception as exc:
+                return ["<%s while reading getlist>" % type(exc).__name__]
+
+        try:
+            httprequest = getattr(request, 'httprequest', None)
+            form = getattr(httprequest, 'form', None)
+            args = getattr(httprequest, 'args', None)
+            files = getattr(httprequest, 'files', None)
+            params = getattr(request, 'params', None)
+            controller = "%s.%s" % (type(self).__module__, type(self).__qualname__)
+            mro = ["%s.%s" % (cls.__module__, cls.__qualname__) for cls in type(self).__mro__]
+            _logger.warning(
+                "HR applicant job_id debug stage=%s controller=%s mro=%r path=%r method=%r "
+                "model=%r kwargs_job_id=%r params_job_id=%r values_job_id=%r "
+                "form_job_id=%r form_job_id_list=%r form_flat_false=%r "
+                "args_job_id=%r args_flat_false=%r files_keys=%r "
+                "params_type=%s form_type=%s kwargs_keys=%r values_keys=%r",
+                stage,
+                controller,
+                mro,
+                getattr(httprequest, 'path', None),
+                getattr(httprequest, 'method', None),
+                model_name,
+                _container_get(kwargs, 'job_id'),
+                _container_get(params, 'job_id'),
+                _container_get(values, 'job_id'),
+                _container_get(form, 'job_id'),
+                _getlist(form, 'job_id'),
+                _to_flat_false_dict(form),
+                _container_get(args, 'job_id'),
+                _to_flat_false_dict(args),
+                _container_keys(files),
+                type(params).__name__ if params is not None else None,
+                type(form).__name__ if form is not None else None,
+                _container_keys(kwargs),
+                _container_keys(values),
+            )
+        except Exception:
+            _logger.exception("HR applicant job_id debug failed at stage=%s", stage)
+
+    def _sanitize_hr_applicant_job_id_sources(self, stage, kwargs=None, values=None):
+        def _sanitize_container(source, container):
+            if container is None or not hasattr(container, 'get'):
+                return
+            job_id = container.get('job_id')
+            fixed_job_id = None
+            if isinstance(job_id, str) and ',' in job_id:
+                fixed_job_id = job_id.split(',', 1)[0].strip()
+            elif isinstance(job_id, (list, tuple)) and job_id:
+                fixed_job_id = str(job_id[0]).split(',', 1)[0].strip()
+            if fixed_job_id is not None:
+                _logger.warning(
+                    "HR applicant job_id sanitize stage=%s source=%s raw=%r fixed=%r",
+                    stage,
+                    source,
+                    job_id,
+                    fixed_job_id,
+                )
+                try:
+                    container['job_id'] = fixed_job_id
+                except Exception:
+                    _logger.exception(
+                        "HR applicant job_id sanitize failed stage=%s source=%s raw=%r",
+                        stage,
+                        source,
+                        job_id,
+                    )
+
+        _sanitize_container('kwargs', kwargs)
+        _sanitize_container('values', values)
+        _sanitize_container('request.params', getattr(request, 'params', None))
 
     @http.route('/website/form', type='http', auth="public", methods=['POST'], multilang=False, readonly=True)
     def website_form_empty(self, **kwargs):
@@ -30,11 +142,13 @@ class WebsiteForm(http.Controller):
     # Check and insert values from the form on the model <model>
     @http.route('/website/form/<string:model_name>', type='http', auth="public", methods=['POST'], website=True, csrf=False)
     def website_form(self, model_name, **kwargs):
+        self._log_hr_applicant_job_id_state('website_form entry route kwargs', model_name=model_name, kwargs=kwargs)
         # Partial CSRF check, only performed when session is authenticated, as there
         # is no real risk for unauthenticated sessions here. It's a common case for
         # embedded forms now: SameSite policy rejects the cookies, so the session
         # is lost, and the CSRF check fails, breaking the post for no good reason.
         csrf_token = request.params.pop('csrf_token', None)
+        self._log_hr_applicant_job_id_state('website_form after csrf pop', model_name=model_name, kwargs=kwargs)
         if request.session.uid and not request.validate_csrf(csrf_token):
             raise BadRequest('Session expired (invalid CSRF token)')
 
@@ -48,6 +162,7 @@ class WebsiteForm(http.Controller):
                     # request.params was modified, update kwargs to reflect the changes
                     kwargs = dict(request.params)
                     kwargs.pop('model_name')
+                    self._log_hr_applicant_job_id_state('website_form rebuilt kwargs from request.params', model_name=model_name, kwargs=kwargs)
                     res = self._handle_website_form(model_name, **kwargs)
                     # ignore savepoint closing error if the transaction was committed
                     try:
@@ -63,11 +178,19 @@ class WebsiteForm(http.Controller):
         })
 
     def _handle_website_form(self, model_name, **kwargs):
+        self._log_hr_applicant_job_id_state('_handle_website_form entry before sanitize', model_name=model_name, kwargs=kwargs)
+        if model_name == 'hr.applicant':
+            self._sanitize_hr_applicant_job_id_sources('_handle_website_form entry', kwargs=kwargs)
+            self._log_hr_applicant_job_id_state('_handle_website_form after sanitize', model_name=model_name, kwargs=kwargs)
+
         model_record = request.env['ir.model'].sudo().search([('model', '=', model_name), ('website_form_access', '=', True)])
         if not model_record:
             return json.dumps({
                 'error': _("The form's specified model does not exist")
             })
+
+        if model_name == 'hr.applicant':
+            self._log_hr_applicant_job_id_state('_handle_website_form before extract_data', model_name=model_name, kwargs=kwargs)
 
         try:
             data = self.extract_data(model_record, kwargs)
@@ -77,6 +200,7 @@ class WebsiteForm(http.Controller):
             return json.dumps({'error_fields': e.args[0]})
 
         try:
+            self._log_hr_applicant_job_id_state('_handle_website_form before insert_record', model_name=model_name, kwargs=kwargs, values=data['record'])
             id_record = self.insert_record(request, model_record, data['record'], data['custom'], data.get('meta'))
             if id_record:
                 self.insert_attachment(model_record, id_record, data['attachments'])
@@ -166,6 +290,7 @@ class WebsiteForm(http.Controller):
     # Extract all data sent by the form and sort its on several properties
     def extract_data(self, model, values):
         dest_model = request.env[model.sudo().model]
+        self._log_hr_applicant_job_id_state('website.extract_data entry', model_name=dest_model._name, values=values)
 
         data = {
             'record': {},        # Values to create record
@@ -175,12 +300,26 @@ class WebsiteForm(http.Controller):
         }
 
         authorized_fields = model.with_user(SUPERUSER_ID)._get_form_writable_fields(values)
+        if dest_model._name == 'hr.applicant':
+            _logger.warning(
+                "HR applicant job_id debug stage=website.extract_data authorized_field field=%r keys=%r",
+                authorized_fields.get('job_id'),
+                list(authorized_fields.keys()),
+            )
         error_fields = []
         custom_fields = []
 
         for field_name, field_value in values.items():
             # First decode the field_name encoded at the client side.
             field_name = re.sub('&quot;', '"', field_name)
+
+            if dest_model._name == 'hr.applicant' and field_name == 'job_id':
+                _logger.warning(
+                    "HR applicant job_id debug stage=website.extract_data loop raw field_name=%r field_value=%r authorized=%r",
+                    field_name,
+                    field_value,
+                    authorized_fields.get(field_name),
+                )
 
             # If the value of the field if a file
             if hasattr(field_value, 'filename'):
@@ -218,7 +357,18 @@ class WebsiteForm(http.Controller):
                     else:
                         input_filter = self._input_filters[authorized_fields[field_name]['type']]
                         data['record'][field_name] = input_filter(self, field_name, field_value)
+                        if dest_model._name == 'hr.applicant' and field_name == 'job_id':
+                            _logger.warning(
+                                "HR applicant job_id debug stage=website.extract_data converted field_value=%r record_job_id=%r",
+                                field_value,
+                                data['record'].get('job_id'),
+                            )
                 except ValueError:
+                    if dest_model._name == 'hr.applicant' and field_name == 'job_id':
+                        _logger.exception(
+                            "HR applicant job_id debug stage=website.extract_data conversion ValueError field_value=%r",
+                            field_value,
+                        )
                     error_fields.append(field_name)
 
                 if dest_model._name == 'mail.mail' and field_name == 'email_from':
@@ -253,7 +403,9 @@ class WebsiteForm(http.Controller):
         #     values['name'] = '%s\'s Application' % values['partner_name']
         #     return values
         if hasattr(dest_model, "website_form_input_filter"):
+            self._log_hr_applicant_job_id_state('website.extract_data before website_form_input_filter', model_name=dest_model._name, values=data['record'])
             data['record'] = dest_model.website_form_input_filter(request, data['record'])
+            self._log_hr_applicant_job_id_state('website.extract_data after website_form_input_filter', model_name=dest_model._name, values=data['record'])
 
         missing_required_fields = [label for label, field in authorized_fields.items() if field['required'] and label not in data['record']]
         if any(error_fields):
