@@ -1,10 +1,14 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
+import logging
+
 from odoo import tools
 from odoo.addons.phone_validation.tools import phone_validation
 from odoo.addons.website.controllers import form
 from odoo.http import request
+
+_logger = logging.getLogger(__name__)
 
 
 class WebsiteForm(form.WebsiteForm):
@@ -23,11 +27,34 @@ class WebsiteForm(form.WebsiteForm):
 
     # Check and insert values from the form on the model <model> + validation phone fields
     def _handle_website_form(self, model_name, **kwargs):
+        self._log_hr_applicant_job_id_state('website_crm._handle_website_form entry', model_name=model_name, kwargs=kwargs)
+        if model_name == 'hr.applicant':
+            self._sanitize_hr_applicant_job_id_sources(
+                'website_crm._handle_website_form before preliminary extract_data',
+                kwargs=kwargs,
+                values=request.params,
+            )
+            self._log_hr_applicant_job_id_state(
+                'website_crm._handle_website_form before preliminary extract_data',
+                model_name=model_name,
+                kwargs=kwargs,
+                values=request.params,
+            )
         model_record = request.env['ir.model'].sudo().search([('model', '=', model_name), ('website_form_access', '=', True)])
         if model_record:
             try:
                 data = self.extract_data(model_record, request.params)
-            except:
+                self._log_hr_applicant_job_id_state(
+                    'website_crm._handle_website_form after preliminary extract_data',
+                    model_name=model_name,
+                    kwargs=kwargs,
+                    values=data.get('record', {}),
+                )
+            except Exception:
+                if model_name == 'hr.applicant':
+                    _logger.exception(
+                        "HR applicant job_id debug stage=website_crm._handle_website_form preliminary extract_data failed"
+                    )
                 # no specific management, super will do it
                 pass
             else:
@@ -54,6 +81,7 @@ class WebsiteForm(form.WebsiteForm):
                 state = request.env['res.country.state'].search([('code', '=', geoip_state_code), ('country_id.code', '=', geoip_country_code)])
                 if state:
                     request.params['state_id'] = state.id
+        self._log_hr_applicant_job_id_state('website_crm._handle_website_form before super', model_name=model_name, kwargs=kwargs, values=request.params)
         return super(WebsiteForm, self)._handle_website_form(model_name, **kwargs)
 
     def insert_record(self, request, model, values, custom, meta=None):

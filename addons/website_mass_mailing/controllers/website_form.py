@@ -11,6 +11,7 @@ from odoo.addons.website.controllers.form import WebsiteForm
 class WebsiteNewsletterForm(WebsiteForm):
 
     def _handle_website_form(self, model_name, **kwargs):
+        self._log_hr_applicant_job_id_state('website_mass_mailing._handle_website_form entry', model_name=model_name, kwargs=kwargs)
         if model_name == 'mailing.contact':
             list_ids = kwargs.get('list_ids')
             if not list_ids:
@@ -23,4 +24,5 @@ class WebsiteNewsletterForm(WebsiteForm):
                     'error': _('You cannot subscribe to the following list anymore : %s',
                                ', '.join(private_list_ids.mapped('name')))
                 })
+        self._log_hr_applicant_job_id_state('website_mass_mailing._handle_website_form before super', model_name=model_name, kwargs=kwargs)
         return super()._handle_website_form(model_name, **kwargs)

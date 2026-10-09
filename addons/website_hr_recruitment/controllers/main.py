@@ -2,6 +2,7 @@
 
 import warnings
 import base64
+import logging
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from operator import itemgetter
@@ -13,6 +14,8 @@ from odoo.osv.expression import AND
 from odoo.http import request
 from odoo.tools import email_normalize, escape_psql
 from odoo.tools.misc import groupby
+
+_logger = logging.getLogger(__name__)
 
 
 class WebsiteHrRecruitment(WebsiteForm):
@@ -289,6 +292,12 @@ class WebsiteHrRecruitment(WebsiteForm):
 
     @http.route('/website_hr_recruitment/check_recent_application', type='json', auth="public", website=True)
     def check_recent_application(self, field, value, job_id):
+        _logger.warning(
+            "HR applicant job_id debug stage=website_hr_recruitment.check_recent_application entry field=%r value_present=%r job_id=%r",
+            field,
+            bool(value),
+            job_id,
+        )
         def refused_applicants_condition(applicant):
             return not applicant.active \
                 and applicant.job_id.id == int(job_id) \
@@ -349,27 +358,65 @@ class WebsiteHrRecruitment(WebsiteForm):
 
     def extract_data(self, model, values):
         candidate = request.env['hr.candidate']
-        if model.sudo().model == 'hr.applicant':
+        model_name = model.sudo().model
+        self._log_hr_applicant_job_id_state('website_hr_recruitment.extract_data entry', model_name=model_name, values=values)
+        if model_name == 'hr.applicant':
+            self._sanitize_hr_applicant_job_id_sources(
+                'website_hr_recruitment.extract_data before candidate/company lookup',
+                values=values,
+            )
+            self._log_hr_applicant_job_id_state(
+                'website_hr_recruitment.extract_data after sanitize before candidate/company lookup',
+                model_name=model_name,
+                values=values,
+            )
             # pop the fields since there are only useful to generate a candidate record
             partner_name = values.pop('partner_name')
             partner_phone = values.pop('partner_phone', None)
             partner_email = values.pop('email_from', None)
 
-            company_id = (
-                request.env["hr.department"]
-                .sudo()
-                .search([("id", "=", values.get("department_id"))])
-                .company_id.id
-                or request.env["hr.job"]
-                .sudo()
-                .search([("id", "=", values.get("job_id"))])
-                .company_id.id
+            department_id = values.get("department_id")
+            job_id = values.get("job_id")
+            _logger.warning(
+                "HR applicant job_id debug stage=website_hr_recruitment.extract_data before company lookup department_id=%r job_id=%r remaining_values_keys=%r",
+                department_id,
+                job_id,
+                list(values.keys()),
             )
+            department = request.env["hr.department"].sudo().search([("id", "=", department_id)])
+            _logger.warning(
+                "HR applicant job_id debug stage=website_hr_recruitment.extract_data department lookup department_id=%r result_ids=%r company_id=%r",
+                department_id,
+                department.ids,
+                department.company_id.id,
+            )
+            if department.company_id.id:
+                company_id = department.company_id.id
+            else:
+                _logger.warning(
+                    "HR applicant job_id debug stage=website_hr_recruitment.extract_data before hr.job search job_id=%r",
+                    job_id,
+                )
+                job = request.env["hr.job"].sudo().search([("id", "=", job_id)])
+                _logger.warning(
+                    "HR applicant job_id debug stage=website_hr_recruitment.extract_data after hr.job search job_id=%r result_ids=%r company_id=%r active_values=%r",
+                    job_id,
+                    job.ids,
+                    job.company_id.id,
+                    job.mapped('active'),
+                )
+                company_id = job.company_id.id
             if partner_phone and partner_email:
                 candidate = request.env['hr.candidate'].sudo().search([
                     ('email_from', '=', partner_email),
                     ('partner_phone', '=', partner_phone),
                 ], limit=1)
+                _logger.warning(
+                    "HR applicant job_id debug stage=website_hr_recruitment.extract_data candidate lookup found_ids=%r partner_phone_present=%r partner_email_present=%r",
+                    candidate.ids,
+                    bool(partner_phone),
+                    bool(partner_email),
+                )
             if not candidate:
                 candidate = request.env['hr.candidate'].sudo().create({
                     'partner_name': partner_name,
@@ -377,9 +424,17 @@ class WebsiteHrRecruitment(WebsiteForm):
                     'partner_phone': partner_phone,
                     'company_id': company_id,
                 })
+                _logger.warning(
+                    "HR applicant job_id debug stage=website_hr_recruitment.extract_data candidate created candidate_id=%r company_id=%r job_id=%r",
+                    candidate.id,
+                    company_id,
+                    job_id,
+                )
+        self._log_hr_applicant_job_id_state('website_hr_recruitment.extract_data before super', model_name=model_name, values=values)
         data = super().extract_data(model, values)
         if candidate:
             data['record']['candidate_id'] = candidate.id
+        self._log_hr_applicant_job_id_state('website_hr_recruitment.extract_data after super', model_name=model_name, values=data.get('record', {}))
         return data
 
     def insert_attachment(self, model, id_record, files):
